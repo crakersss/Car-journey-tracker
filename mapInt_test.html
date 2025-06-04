@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Journey Map Viewer</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css" />
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; padding: 20px; }
+        #map { height: 500px; width: 100%; }
+        .container { max-width: 800px; }
+        .leaflet-popup-content { font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 class="text-center mb-4">Journey Map Viewer</h2>
+        <p id="status" class="text-center mb-3">Upload a CSV to visualize the journey with mock GPS circle</p>
+        <div class="text-center mb-3">
+            <input type="file" id="csvFile" accept=".csv" class="form-control d-inline-block w-auto" />
+        </div>
+        <div id="map"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+    <script>
+        // Initialize map
+        const map = L.map('map', {
+            zoomControl: true,
+            dragging: true,
+            touchZoom: true,
+            doubleClickZoom: true,
+            scrollWheelZoom: true,
+            boxZoom: true,
+            keyboard: true
+        }).setView([-36.8485, 174.7633], 11); // Default center (Auckland, NZ)
+
+        // Add OpenStreetMap tiles
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+        }).addTo(map);
+
+        // Generate circular GPS points
+        function generateCirclePoints(centerLat, centerLon, radiusKm, numPoints) {
+            const points = [];
+            const earthRadius = 6371; // km
+            const angularDistance = radiusKm / earthRadius;
+
+            for (let i = 0; i < numPoints; i++) {
+                const bearing = (i / numPoints) * 2 * Math.PI;
+                const lat = Math.asin(
+                    Math.sin(centerLat * Math.PI / 180) * Math.cos(angularDistance) +
+                    Math.cos(centerLat * Math.PI / 180) * Math.sin(angularDistance) * Math.cos(bearing)
+                ) * 180 / Math.PI;
+                const lon = centerLon + Math.atan2(
+                    Math.sin(bearing) * Math.sin(angularDistance) * Math.cos(centerLat * Math.PI / 180),
+                    Math.cos(angularDistance) - Math.sin(centerLat * Math.PI / 180) * Math.sin(lat * Math.PI / 180)
+                ) * 180 / Math.PI;
+                points.push({ lat, lon });
+            }
+            return points;
+        }
+
+        let journeyData = [];
+
+        // Handle CSV upload
+        document.getElementById('csvFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            document.getElementById('status').textContent = 'Loading journey...';
+
+            Papa.parse(file, {
+                header: true,
+                complete: function(results) {
+                    const csvData = results.data.filter(row => row.timestamp && row.rpm && row.speed);
+                    const numPoints = csvData.length || 100; // Default to 100 if no data
+
+                    // Generate circular GPS points (10 km radius, Auckland)
+                    const circlePoints = generateCirclePoints(-36.8485, 174.7633, 10, numPoints);
+
+                    // Map CSV data to circular points
+                    journeyData = csvData.map((row, i) => ({
+                        lat: circlePoints[i % circlePoints.length].lat,
+                        lon: circlePoints[i % circlePoints.length].lon,
+                        speed: parseFloat(row.speed) || 0,
+                        rpm: parseFloat(row.rpm) || 0
+                    }));
+
+                    if (csvData.length === 0) {
+                        document.getElementById('status').textContent = 'No valid CSV data found. Using mock data.';
+                        journeyData = [
+                            { lat: -36.8485, lon: 174.7633, speed: 60, rpm: 3000 },
+                            { lat: -36.8490, lon: 174.7640, speed: 65, rpm: 3200 },
+                            { lat: -36.8500, lon: 174.7650, speed: 70, rpm: 3400 },
+                            { lat: -36.8510, lon: 174.7660, speed: 55, rpm: 2800 }
+                        ];
+                    } else {
+                        document.getElementById('status').textContent = 'Journey loaded!';
+                    }
+                    drawJourney(journeyData);
+                },
+                error: function(error) {
+                    document.getElementById('status').textContent = `Error loading CSV: ${error}`;
+                }
+            });
+        });
+
+        // Draw journey polyline, markers, and fit map
+        function drawJourney(data) {
+            // Remove existing layers
+            map.eachLayer(layer => {
+                if (layer instanceof L.Polyline || layer instanceof L.CircleMarker) map.removeLayer(layer);
+            });
+
+            // Draw polyline
+            const coords = data.map(d => [d.lat, d.lon]);
+            const polyline = L.polyline(coords, { color: 'blue', weight: 4 }).addTo(map);
+
+            // Add red circle markers with hover tooltips
+            data.forEach((point, idx) => {
+                const marker = L.circleMarker([point.lat, point.lon], {
+                    radius: 5,
+                    fillColor: 'red',
+                    color: 'red',
+                    weight: 1,
+                    fillOpacity: 0.8
+                }).addTo(map);
+                marker.on('mouseover', function() {
+                    L.popup()
+                        .setLatLng([point.lat, point.lon])
+                        .setContent(`Speed: ${point.speed} km/h<br>RPM: ${point.rpm}`)
+                        .openOn(map);
+                });
+                marker.on('mouseout', function() {
+                    map.closePopup();
+                });
+            });
+
+            // Fit map to journey bounds with padding
+            if (coords.length > 0) {
+                const bounds = L.latLngBounds(coords);
+                const paddedBounds = bounds.pad(0.2); // 20% padding
+                map.fitBounds(paddedBounds);
+                map.setMaxBounds(paddedBounds); // Restrict panning
+                map.setMinZoom(map.getZoom() - 1); // Allow slight zoom out
+                map.setMaxZoom(map.getZoom() + 2); // Allow limited zoom in
+            }
+        }
+    </script>
+</body>
+</html>
