@@ -146,7 +146,7 @@
                 map.fitBounds(paddedBounds);
                 map.setMaxBounds(paddedBounds); // Restrict panning
                 map.setMinZoom(map.getZoom() - 1); // Allow slight zoom out
-                map.setMaxZoom(map.getZoom() + 2); // Allow limited zoom in
+                map.setMaxZoom(18); // Allow zooming in to max detail
             }
         }
     </script>
